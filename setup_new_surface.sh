@@ -148,6 +148,17 @@ if [ -d "$TARGET_DIR/lib/$OLD_SNAKE" ]; then
   success "Renamed lib/$OLD_SNAKE -> lib/$APP_SNAKE"
 fi
 
+# ---- Copy improved Makefile from reference source (gtd_bot preferred) ----
+GTD_BOT_MAKEFILE="$(cd "$TEMPLATE_DIR" && while [ ! -d "bots/bot_army_gtd" ]; do cd ..; done; pwd)/bots/bot_army_gtd/Makefile"
+if [ -f "$GTD_BOT_MAKEFILE" ]; then
+  # Use gtd as reference but adapt it for surfaces (no tests/credo/dialyzer by default, add docker/deploy targets)
+  cp "$GTD_BOT_MAKEFILE" "$TARGET_DIR/Makefile.reference"
+  success "Reference Makefile copied from gtd_bot (saved as Makefile.reference for review)"
+  info "Tip: You can merge patterns from Makefile.reference into your Makefile for improved automation."
+else
+  info "Note: gtd_bot Makefile reference not found. Using template Makefile as-is."
+fi
+
 # Append to port registry so future setup runs can warn on conflicts
 if [ -n "$SURFACE_PORT" ]; then
   echo "${APP_SNAKE}:${SURFACE_PORT}" >> "$PORT_REGISTRY" 2>/dev/null || true
@@ -185,11 +196,38 @@ success "Git hooks path set (core.hooksPath = git-hooks)"
 
 success "Done."
 echo ""
+
+# ---- Auto-create GitHub repo (if gh is available) ----
+if command -v gh &>/dev/null; then
+  info "Creating GitHub repository..."
+  GITHUB_REPO="ergon-automation-labs/${GITHUB_REPO_SUFFIX}"
+
+  if gh repo view "$GITHUB_REPO" &>/dev/null 2>&1; then
+    success "Repository already exists: https://github.com/$GITHUB_REPO"
+  else
+    if gh repo create "$GITHUB_REPO" --private --source="$TARGET_DIR" --remote=origin --push 2>&1 | grep -q "github.com"; then
+      success "GitHub repository created (private): https://github.com/$GITHUB_REPO"
+    else
+      info "Creating repo without immediate push (will set up remote manually)..."
+      gh repo create "$GITHUB_REPO" --private 2>&1 | grep -q "github.com" && success "Repository created: https://github.com/$GITHUB_REPO" || info "Note: Could not auto-create repo. You can create it manually in GitHub."
+    fi
+  fi
+
+  # Set remote if not already set
+  if ! (cd "$TARGET_DIR" && git remote | grep -q origin); then
+    (cd "$TARGET_DIR" && git remote add origin "git@github.com:${GITHUB_REPO}.git")
+    success "Remote set: git@github.com:${GITHUB_REPO}.git"
+  fi
+else
+  info "GitHub CLI (gh) not found. You can create the repo manually:"
+  echo "  gh repo create ergon-automation-labs/${GITHUB_REPO_SUFFIX} --private"
+fi
+
+echo ""
 echo "Next steps:"
 echo "  cd $TARGET_DIR"
 echo "  make setup          # deps + confirm githooks"
-echo "  git remote add origin git@github.com:ergon-automation-labs/${GITHUB_REPO_SUFFIX}.git   # or your repo URL"
-echo "  Add LiveView client (assets) and your routes/LiveViews (see README)."
+echo "  make run            # Test locally (spawns even-terminal or your service)"
 echo "  git add . && git commit -m 'Initial surface' && git push -u origin main"
-echo "  (Pushing to main runs pre-push: build release, publish to GitHub; Jenkins then deploys.)"
+echo "  make deploy-surface # Deploy to production (via bot_army_infra)"
 echo ""
