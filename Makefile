@@ -1,4 +1,4 @@
-.PHONY: run deps compile clean help setup setup-hooks init release publish-release docker-build docker-up docker-down
+.PHONY: help setup setup-hooks init deps clean run release publish-release docker-build docker-up docker-down git-push push-and-publish deploy-surface
 
 help:
 	@echo "LiveView Surface Template"
@@ -17,9 +17,12 @@ help:
 	@echo "  make docker-up    - Start containers (docker-compose up)"
 	@echo "  make docker-down  - Stop containers (docker-compose down)"
 	@echo ""
-	@echo "Release (normally via git pre-push):"
-	@echo "  make release         - Build OTP release"
+	@echo "Release & Deploy:"
+	@echo "  make release         - Build OTP release locally"
 	@echo "  make publish-release - Build, tarball, and publish to GitHub"
+	@echo "  make git-push        - Push to origin main (triggers pre-push: build release, publish)"
+	@echo "  make push-and-publish - git push + explicit publish-release"
+	@echo "  make deploy-surface  - Deploy to production via bot_army_infra"
 	@echo ""
 
 setup: init deps setup-hooks
@@ -64,3 +67,29 @@ docker-up:
 docker-down:
 	docker-compose down
 	@echo "✓ Containers stopped"
+
+git-push:
+	@SURFACE_NAME=surface_liveview_template; \
+	LOG_FILE="/tmp/.git-push-$$SURFACE_NAME-$$-$$(date +%s).log"; \
+	echo "📋 Logging to: $$LOG_FILE" && \
+	echo "=== GIT PUSH ($$SURFACE_NAME) ===" > "$$LOG_FILE" && \
+	echo "Timestamp: $$(date)" >> "$$LOG_FILE" && \
+	echo "Surface: $$SURFACE_NAME" >> "$$LOG_FILE" && \
+	echo "" >> "$$LOG_FILE" && \
+	if git push -u origin main >> "$$LOG_FILE" 2>&1; then \
+		echo "✅ Push succeeded"; \
+		echo "✅ PUSH COMPLETE" >> "$$LOG_FILE"; \
+	else \
+		echo "❌ Push failed (see log)"; \
+		echo "❌ PUSH FAILED" >> "$$LOG_FILE"; \
+		tail -30 "$$LOG_FILE"; \
+		exit 1; \
+	fi && \
+	echo "📋 Full log: $$LOG_FILE"
+
+push-and-publish: git-push publish-release
+	@echo "✓ Pushed and published successfully"
+
+deploy-surface:
+	@INFRA_DIR=$$(cd $(CURDIR) && while [ ! -d "bots/bot_army_infra" ]; do cd ..; done; pwd)/bots/bot_army_infra; \
+	$(MAKE) -C $$INFRA_DIR deploy-surface SURFACE=surface_liveview_template
