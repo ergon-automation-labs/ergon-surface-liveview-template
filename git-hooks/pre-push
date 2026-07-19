@@ -1,73 +1,57 @@
 #!/bin/bash
-# Git pre-push hook for __SURFACE_NAME__ (Phoenix LiveView surface)
-# Validates compilation and builds release before pushing to main. Jenkins deploys from GitHub releases.
+# Lightweight git pre-push hook for Phoenix LiveView surfaces
+# Keep push fast/reliable: run quick local validation only.
 
 set -e
+
+MIX_BIN="/Users/abby/.local/share/mise/shims/mix"
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+export HEX_HOME="$REPO_ROOT/.cache/hex"
+export MIX_HOME="$REPO_ROOT/.cache/mix"
+mkdir -p "$HEX_HOME" "$MIX_HOME"
 
 echo "🔍 Running pre-push checks..."
 echo ""
 
-# Check if we're pushing to main
-read local_ref local_oid remote_ref remote_oid
-if [[ $remote_ref == "refs/heads/main" ]]; then
-  echo "⚠️  Pushing to main branch - validating and building release..."
+push_to_main=0
+while read -r local_ref local_oid remote_ref remote_oid; do
+  if [[ $remote_ref == "refs/heads/main" ]]; then
+    push_to_main=1
+  fi
+done
+
+if [[ $push_to_main -eq 1 ]]; then
+  echo "⚠️  Pushing to main branch - running fast validation only..."
   echo ""
 
-  echo "📦 Installing dependencies..."
-  mix deps.get || {
-    echo "❌ Failed to install dependencies"
+  echo "📦 Ensuring Hex + dependencies..."
+  "$MIX_BIN" local.hex --force --force || {
+    echo "❌ mix local.hex failed - push aborted"
     exit 1
   }
-
-  echo ""
-  echo "🔨 Compiling code..."
-  mix compile --force || {
-    echo "❌ Compilation failed - push aborted"
-    exit 1
-  }
-
-  echo ""
-  echo "📝 Running linter (optional)..."
-  mix credo --strict 2>/dev/null || true
-
-  echo ""
-  echo "📦 Building OTP release..."
-  MIX_ENV=prod mix release --overwrite || {
-    echo "❌ Release build failed - push aborted"
-    exit 1
-  }
-
-  echo ""
-  echo "🚀 Publishing release to GitHub..."
-  RELEASE_NAME="__SURFACE_NAME__"
-  VERSION=$(cat _build/prod/rel/"$RELEASE_NAME"/releases/start_erl.data 2>/dev/null | awk '{print $2}')
-  if [ -z "$VERSION" ]; then
-    echo "❌ Could not read release version"
+  DEPS_LOG="/tmp/.pre-push-deps-$$.log"
+  if ! "$MIX_BIN" deps.get >"$DEPS_LOG" 2>&1; then
+    echo "❌ mix deps.get failed - push aborted"
+    echo ""
+    echo "=== Dependency resolution error ==="
+    cat "$DEPS_LOG"
     exit 1
   fi
-  echo "Version: $VERSION"
+  echo ""
 
-  tar -czf "$RELEASE_NAME-$VERSION.tar.gz" -C _build/prod/rel "$RELEASE_NAME"/ || {
-    echo "❌ Failed to create tarball"
+  echo "🕵️  Checking for Mix.env() in runtime code..."
+  if grep -r "Mix.env()" lib/ --include="*.ex" 2>/dev/null | grep -v "@env Mix.env()" > /dev/null; then
+    echo "❌ Mix.env() found in runtime code. Use @env Mix.env() for compile-time access instead."
     exit 1
-  }
-  echo "✓ Tarball created: $RELEASE_NAME-$VERSION.tar.gz"
-
-  gh release create "v$VERSION" "$RELEASE_NAME-$VERSION.tar.gz" \
-    --repo "ergon-automation-labs/__GITHUB_REPO_SUFFIX__" \
-    --title "Release v$VERSION" \
-    --notes "Phoenix LiveView surface __SURFACE_NAME__ v$VERSION. Deployed by Jenkins." \
-    --draft=false || {
-    echo "⚠️  Release already exists or GitHub publish failed"
-    echo "Continuing with push anyway..."
-  }
-  echo "✓ Release published to GitHub"
+  fi
 
   echo ""
-  echo "✅ All checks passed, release built and published!"
-  echo "📤 Proceeding with push..."
+  echo "✅ Pre-push validation passed (fast)"
+  echo "ℹ️  Full validation (compile/credo/tests) will run post-push in background"
+  echo "ℹ️  Publish releases explicitly with: make push-and-publish"
 else
-  echo "ℹ️  Pushing to feature branch - skipping validation"
+  echo "ℹ️  Pushing to feature branch - skipping pre-push validation"
 fi
 
 echo ""
